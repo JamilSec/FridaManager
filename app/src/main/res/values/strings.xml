@@ -1,0 +1,79 @@
+<resources>
+    <string name="app_name">Frida Manager</string>
+    <string name="app_tagline">Pro · Cyber-Security Toolkit</string>
+
+    <!-- Tabs -->
+    <string name="tab_local">LOCAL</string>
+    <string name="tab_remote">REMOTOS</string>
+    <string name="tab_logs">REGISTROS</string>
+    <string name="tab_settings">AJUSTES</string>
+
+    <!-- Status -->
+    <string name="status_active">ACTIVO</string>
+    <string name="status_inactive">INACTIVO</string>
+    <string name="status_live">LIVE</string>
+    <string name="status_offline">OFFLINE</string>
+    <string name="status_label">ESTADO DEL SISTEMA</string>
+    <string name="status_root_label">ACCESO ROOT</string>
+    <string name="status_root_granted">CONCEDIDO</string>
+    <string name="status_root_denied">DENEGADO</string>
+
+    <!-- Métricas -->
+    <string name="metric_uptime">TIEMPO ACTIVO</string>
+    <string name="metric_port">PUERTO</string>
+    <string name="metric_address">DIRECCIÓN</string>
+    <string name="metric_pid">PID</string>
+
+    <!-- Botones -->
+    <string name="action_start">INICIAR SERVICIO</string>
+    <string name="action_stop">DETENER SERVICIO</string>
+    <string name="action_refresh">Refrescar</string>
+    <string name="action_download">DESCARGAR E INSTALAR</string>
+    <string name="action_delete">ELIMINAR BINARIO SELECCIONADO</string>
+    <string name="action_deleting">ELIMINANDO…</string>
+    <string name="action_export">Exportar</string>
+    <string name="action_clear">Limpiar</string>
+    <string name="action_search">Buscar</string>
+    <string name="action_github">REPOSITORIO EN GITHUB</string>
+
+    <!-- Empty / placeholders -->
+    <string name="empty_local">DEPÓSITO LOCAL VACÍO</string>
+    <string name="empty_local_hint">Descarga el binario desde la pestaña REMOTOS o súbelo manualmente con ADB.</string>
+    <string name="empty_remote">No se pudo obtener información del repositorio.</string>
+    <string name="empty_logs">SIN ACTIVIDAD REGISTRADA</string>
+
+    <!-- Configuración -->
+    <string name="cfg_section_network">CONFIGURACIÓN DE RED</string>
+    <string name="cfg_section_maintenance">MANTENIMIENTO</string>
+    <string name="cfg_port_label">Puerto del servidor</string>
+    <string name="cfg_address_label">Dirección de escucha</string>
+
+    <!-- Info -->
+    <string name="info_app_name_pro">FRIDA MANAGER</string>
+    <string name="info_subtitle">Gestor profesional · por J41K</string>
+    <string name="info_version_prefix">Versión</string>
+
+    <!-- Logs -->
+    <string name="logs_section_label">REGISTROS DEL SISTEMA</string>
+    <string name="logs_search_placeholder">Filtrar por contenido…</string>
+    <string name="logs_filter_all">TODO</string>
+    <string name="logs_filter_info">INFO</string>
+    <string name="logs_filter_ok">OK</string>
+    <string name="logs_filter_warn">WARN</string>
+    <string name="logs_filter_error">ERROR</string>
+    <string name="logs_autoscroll_on">Auto-scroll: ON</string>
+    <string name="logs_autoscroll_off">Auto-scroll: OFF</string>
+
+    <!-- Remotos -->
+    <string name="remote_section_label">LANZAMIENTOS EN GITHUB</string>
+    <string name="remote_latest_label">ÚLTIMA VERSIÓN</string>
+    <string name="remote_published">Publicado</string>
+    <string name="remote_size">Tamaño</string>
+    <string name="remote_arch">Arquitectura</string>
+    <string name="remote_changelog">Notas de la versión</string>
+    <string name="remote_show_changelog">Ver notas</string>
+    <string name="remote_hide_changelog">Ocultar notas</string>
+
+    <!-- GitHub -->
+    <string name="github_repo_url">https://github.com/frida/frida</string>
+</resources>
