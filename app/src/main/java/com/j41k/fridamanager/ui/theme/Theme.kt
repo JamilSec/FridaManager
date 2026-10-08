@@ -1,14 +1,15 @@
 package com.j41k.fridamanager.ui.theme
 
-import android.app.Activity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.SideEffect
-import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalView
-import androidx.core.view.WindowCompat
 
+/**
+ * La app es intencionadamente solo-oscura (herramienta de análisis usada junto a
+ * terminales/IDEs). Las barras del sistema se configuran en MainActivity con
+ * enableEdgeToEdge(SystemBarStyle.dark) para que los iconos sean claros aunque
+ * el sistema esté en modo claro.
+ */
 private val ProColorScheme = darkColorScheme(
     primary             = AccentPrimary,
     onPrimary           = TextOnAccent,
@@ -17,18 +18,26 @@ private val ProColorScheme = darkColorScheme(
 
     secondary           = AccentCyan,
     onSecondary         = TextOnAccent,
-    secondaryContainer  = AccentCyanLo,
-    onSecondaryContainer = TextPrimary,
+    secondaryContainer  = AccentPrimary.copy(alpha = 0.18f),
+    onSecondaryContainer = AccentPrimaryHi,
 
     tertiary            = StatusOnline,
     onTertiary          = TextOnAccent,
 
     background          = SurfaceBase,
     onBackground        = TextPrimary,
-    surface             = SurfaceLow,
+    surface             = SurfaceBase,
     onSurface           = TextPrimary,
     surfaceVariant      = SurfaceMid,
     onSurfaceVariant    = TextSecondary,
+    surfaceContainerLowest = SurfaceBase,
+    surfaceContainerLow = SurfaceLow,
+    surfaceContainer    = SurfaceLow,
+    surfaceContainerHigh = SurfaceMid,
+    surfaceContainerHighest = SurfaceHigh,
+    inverseSurface      = TextPrimary,
+    inverseOnSurface    = SurfaceBase,
+    inversePrimary      = AccentPrimaryLo,
 
     outline             = SurfaceBorder,
     outlineVariant      = SurfaceDivider,
@@ -40,25 +49,9 @@ private val ProColorScheme = darkColorScheme(
 )
 
 @Composable
-fun FridaManagerTheme(
-    darkTheme: Boolean = true,
-    dynamicColor: Boolean = false,
-    content: @Composable () -> Unit
-) {
-    val colorScheme = ProColorScheme
-
-    val view = LocalView.current
-    if (!view.isInEditMode) {
-        SideEffect {
-            val window = (view.context as Activity).window
-            window.statusBarColor = colorScheme.background.toArgb()
-            window.navigationBarColor = colorScheme.background.toArgb()
-            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = false
-        }
-    }
-
+fun FridaManagerTheme(content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = colorScheme,
+        colorScheme = ProColorScheme,
         typography = Typography,
         content = content
     )

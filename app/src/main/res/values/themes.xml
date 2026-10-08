@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.FridaManager" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- Base oscura: evita el destello blanco entre el splash y el primer frame de Compose. -->
+    <style name="Theme.FridaManager" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/surface_base</item>
+        <item name="android:colorBackground">@color/surface_base</item>
+    </style>
 
     <style name="Theme.App.Starting" parent="Theme.SplashScreen">
         <item name="windowSplashScreenBackground">@color/surface_base</item>

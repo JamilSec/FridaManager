@@ -12,6 +12,9 @@ import com.j41k.fridamanager.data.FridaShell
 import com.j41k.fridamanager.net.FridaDownloader
 import com.j41k.fridamanager.service.FridaService
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import java.io.OutputStream
 
 /** Nivel semántico de un mensaje de log (detectado por símbolo prefijo). */
@@ -34,12 +37,20 @@ enum class LogLevel(val symbol: String) {
 }
 
 data class LogEntry(
+    val id: Long,
     val timestamp: String,
     val message: String,
     val level: LogLevel
 ) {
     fun toExportLine(): String = "[$timestamp] ${level.symbol} $message"
 }
+
+/** Mensaje efímero para el usuario (Snackbar), con acción opcional. */
+data class UiMessage(
+    val text: String,
+    val actionLabel: String? = null,
+    val onAction: (() -> Unit)? = null
+)
 
 class FridaViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -67,17 +78,25 @@ class FridaViewModel(application: Application) : AndroidViewModel(application) {
     /** Buffer estructurado de logs (sustituye a la lista de strings plana). */
     val logEntries = mutableStateListOf<LogEntry>()
 
-    /**
-     * Alias compatibilidad — el código legado lee logs como List<String>.
-     * Lo dejamos derivado para no romper referencias antiguas.
-     */
-    val logs: List<String> get() = logEntries.toList().map { it.toExportLine() }
+    private var nextLogId = 0L
+
+    /** Último id de log visto en la pestaña Registros (para el badge de no leídos). */
+    var logsSeenUpTo by mutableLongStateOf(-1L)
+
+    val unreadLogCount: Int
+        get() = logEntries.count { it.id > logsSeenUpTo }
+
+    fun markLogsSeen() {
+        logEntries.lastOrNull()?.let { logsSeenUpTo = it.id }
+    }
 
     private var logcatJob: Job? = null
 
-    /** Buffer del heartbeat: pulsos del polling (1 = sano, 0 = falló). */
-    val heartbeat = mutableStateListOf<Float>().apply {
-        repeat(40) { add(0f) }
+    private val _messages = MutableSharedFlow<UiMessage>(extraBufferCapacity = 8)
+    val messages: SharedFlow<UiMessage> = _messages.asSharedFlow()
+
+    fun notify(text: String, actionLabel: String? = null, onAction: (() -> Unit)? = null) {
+        _messages.tryEmit(UiMessage(text, actionLabel, onAction))
     }
 
     var isDownloading by mutableStateOf(false)
@@ -99,6 +118,28 @@ class FridaViewModel(application: Application) : AndroidViewModel(application) {
     var logSearchQuery by mutableStateOf("")
     var logLevelFilter by mutableStateOf<LogLevel?>(null) // null = TODO
     var logAutoScroll by mutableStateOf(true)
+
+    // ── Validación de configuración de red ────────────────────
+    val portError: String?
+        get() {
+            val p = fridaPort.toIntOrNull()
+            return when {
+                fridaPort.isBlank() -> "Introduce un puerto"
+                p == null || p !in 1..65535 -> "Puerto entre 1 y 65535"
+                else -> null
+            }
+        }
+
+    val addressError: String?
+        get() {
+            val parts = fridaAddress.split(".")
+            val valid = parts.size == 4 && parts.all { part ->
+                part.isNotEmpty() && part.length <= 3 && part.toIntOrNull()?.let { it in 0..255 } == true
+            }
+            return if (valid) null else "Dirección IPv4 no válida (ej. 0.0.0.0)"
+        }
+
+    val isNetworkConfigValid: Boolean get() = portError == null && addressError == null
 
     private var pollingJob: Job? = null
 
@@ -162,6 +203,19 @@ class FridaViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deviceArchitecture(): String = fridaDownloader.getDeviceArchitecture()
 
+    /**
+     * Nombre de fichero neutro para el binario instalado: sin la cadena "frida"
+     * (para que no delate al server por nombre de fichero ni de proceso) pero
+     * conservando la arquitectura, de la que depende el chequeo de compatibilidad.
+     */
+    private fun neutralBinaryName(arch: String): String {
+        val token = buildString {
+            val chars = "abcdefghijklmnopqrstuvwxyz0123456789"
+            repeat(6) { append(chars.random()) }
+        }
+        return "srv-$token-$arch"
+    }
+
     /** Inserta un log con detección automática de nivel (uso interno + UI). */
     fun addRawLog(message: String) {
         viewModelScope.launch(Dispatchers.Main) {
@@ -170,7 +224,7 @@ class FridaViewModel(application: Application) : AndroidViewModel(application) {
                 java.util.Locale.getDefault()
             ).format(java.util.Date())
             val level = LogLevel.detect(message)
-            logEntries.add(LogEntry(timestamp, message.trimStart(), level))
+            logEntries.add(LogEntry(nextLogId++, timestamp, message.trimStart(), level))
             while (logEntries.size > 500) logEntries.removeAt(0)
         }
     }
@@ -199,8 +253,13 @@ class FridaViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun clearLogs() {
+        if (logEntries.isEmpty()) return
+        val snapshot = logEntries.toList()
         logEntries.clear()
-        addRawLog("Registros limpiados.")
+        notify("Registros borrados", actionLabel = "Deshacer") {
+            logEntries.addAll(0, snapshot)
+            while (logEntries.size > 500) logEntries.removeAt(0)
+        }
     }
 
     /**
@@ -234,13 +293,6 @@ class FridaViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun pushHeartbeat(value: Float) {
-        viewModelScope.launch(Dispatchers.Main) {
-            if (heartbeat.size >= 40) heartbeat.removeAt(0)
-            heartbeat.add(value.coerceIn(0f, 1f))
-        }
-    }
-
     private fun startStatusPolling() {
         pollingJob?.cancel()
         pollingJob = viewModelScope.launch(Dispatchers.IO) {
@@ -248,7 +300,6 @@ class FridaViewModel(application: Application) : AndroidViewModel(application) {
                 val status = try {
                     fridaShell.getDetailedStatus()
                 } catch (e: Exception) {
-                    pushHeartbeat(0f)
                     FridaShell.FridaStatus(false)
                 }
 
@@ -278,12 +329,10 @@ class FridaViewModel(application: Application) : AndroidViewModel(application) {
                             if (uptimeJob?.isActive != true) startUptimeCounter()
                         }
                     }
-                    pushHeartbeat(if (status.isRunning) 1f else 0.18f)
                 } else {
                     if (status.isRunning == fridaStatus.isRunning) {
                         isTransitioning = false
                     }
-                    pushHeartbeat(0.5f)
                 }
 
                 delay(800)
@@ -317,7 +366,7 @@ class FridaViewModel(application: Application) : AndroidViewModel(application) {
         return String.format("%02d:%02d:%02d", hours, minutes, seconds)
     }
 
-    fun refreshBinaries() {
+    fun refreshBinaries(userInitiated: Boolean = false) {
         checkDevSettings() // Refrescar estado del entorno al mismo tiempo
         addRawLog("Escaneando /data/local/tmp...")
         viewModelScope.launch(Dispatchers.IO) {
@@ -334,6 +383,15 @@ class FridaViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 addRawLog("${binaries.size} binario(s) encontrado(s).")
             }
+            if (userInitiated) {
+                notify(
+                    when (binaries.size) {
+                        0 -> "No hay binarios en /data/local/tmp"
+                        1 -> "1 binario encontrado"
+                        else -> "${binaries.size} binarios encontrados"
+                    }
+                )
+            }
         }
     }
 
@@ -346,44 +404,55 @@ class FridaViewModel(application: Application) : AndroidViewModel(application) {
 
             val release = remoteRelease ?: fridaDownloader.getLatestRelease()
             if (release == null) {
-                downloadStatus = "Sin conexión o sin datos"
                 addRawLog("No se pudo contactar con la API de GitHub.")
-                delay(2000)
                 isDownloading = false
                 downloadStatus = ""
+                notify("Sin conexión con GitHub", actionLabel = "Reintentar") { downloadLatestFrida() }
                 return@launch
             }
 
             downloadStatus = "Descargando ${release.version}..."
             addRawLog("Descargando frida-server ${release.version}...")
 
+            var result: String
+            var failed = false
             val downloadedFile = fridaDownloader.downloadAndDecompress(release) { progress ->
                 downloadProgress = progress
             }
 
             if (downloadedFile != null && downloadedFile.exists()) {
                 downloadStatus = "Instalando..."
-                addRawLog("Moviendo binario a /data/local/tmp/...")
-                val targetPath = "/data/local/tmp/${downloadedFile.name}"
+                // Se instala con un nombre de fichero neutro (sin "frida") para que
+                // ni el binario en /data/local/tmp ni el nombre del proceso al lanzarlo
+                // delaten a frida-server. La app lo reconoce por firma de contenido.
+                val installName = neutralBinaryName(release.arch.ifBlank { deviceArchitecture() })
+                addRawLog("Instalando binario como $installName...")
+                val targetPath = "/data/local/tmp/$installName"
                 val success = fridaShell.moveBinary(downloadedFile.absolutePath, targetPath)
                 if (success) {
                     fridaShell.ensureExecutable(targetPath)
-                    downloadStatus = "¡Instalado correctamente!"
                     addRawLog("frida-server ${release.version} instalado y listo.")
+                    result = "frida-server ${release.version} instalado"
                     refreshBinaries()
                 } else {
-                    downloadStatus = "Error al instalar"
                     addRawLog("No se pudo mover el binario. ¿Permisos root?")
+                    result = "No se pudo instalar el binario"
+                    failed = true
                 }
             } else {
-                downloadStatus = "Descarga fallida"
                 addRawLog("La descarga o descompresión falló.")
+                result = "La descarga falló"
+                failed = true
             }
 
-            delay(2500)
             isDownloading = false
             downloadStatus = ""
             downloadProgress = 0f
+            if (failed) {
+                notify(result, actionLabel = "Reintentar") { downloadLatestFrida() }
+            } else {
+                notify(result)
+            }
         }
     }
 
@@ -393,6 +462,10 @@ class FridaViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         if (isTransitioning) return
+        if (!isFridaRunning && !isNetworkConfigValid) {
+            notify("Revisa la configuración de red en Ajustes")
+            return
+        }
 
         val isStarting = !isFridaRunning
         isTransitioning = true
@@ -433,6 +506,7 @@ class FridaViewModel(application: Application) : AndroidViewModel(application) {
                 isTransitioning = false
             } catch (e: Exception) {
                 addRawLog("Error en el servicio: ${e.message}")
+                notify(if (isStarting) "No se pudo iniciar el servicio" else "No se pudo detener el servicio")
                 fridaStatus = fridaStatus.copy(isRunning = !isStarting)
                 isTransitioning = false
             }
@@ -447,10 +521,12 @@ class FridaViewModel(application: Application) : AndroidViewModel(application) {
             delay(800)
             if (fridaShell.deleteBinary(binary.path)) {
                 addRawLog("Binario eliminado correctamente.")
+                notify("${binary.name} eliminado")
                 selectedBinary = null
                 refreshBinaries()
             } else {
                 addRawLog("No se pudo eliminar '${binary.name}'.")
+                notify("No se pudo eliminar el binario")
             }
             isDeleting = false
         }
@@ -462,8 +538,10 @@ class FridaViewModel(application: Application) : AndroidViewModel(application) {
             if (fridaShell.setSelinuxPermissive(target)) {
                 isSelinuxPermissive = target
                 addRawLog(if (target) "✓ SELinux configurado en modo PERMISIVO." else "▶ SELinux configurado en modo ENFORCING.")
+                notify(if (target) "SELinux en modo permisivo" else "SELinux en modo enforcing")
             } else {
                 addRawLog("✗ No se pudo cambiar el estado de SELinux.")
+                notify("No se pudo cambiar SELinux")
             }
         }
     }
@@ -479,8 +557,7 @@ class FridaViewModel(application: Application) : AndroidViewModel(application) {
             addRawLog("▶ Aplicando Turbo Fix (Zygote/Samsung)...")
             
             // 1. SELinux
-            fridaShell.setSelinuxPermissive(true)
-            isSelinuxPermissive = true
+            if (fridaShell.setSelinuxPermissive(true)) isSelinuxPermissive = true
             
             // 2. USAP Pool Fix (Clave para JNI FatalError en Samsung)
             val usapSuccess = fridaShell.runCommand("setprop persist.device_config.runtime_native.usap_pool_enabled false")
@@ -490,8 +567,10 @@ class FridaViewModel(application: Application) : AndroidViewModel(application) {
             
             if (usapSuccess) {
                 addRawLog("✓ Turbo Fix aplicado: USAP desactivado y SELinux Permisivo.")
+                notify("Ajuste para Samsung aplicado")
             } else {
                 addRawLog("⚠ Turbo Fix parcial: Se aplicó SELinux pero falló el setprop.")
+                notify("Ajuste aplicado parcialmente: revisa Registros")
             }
         }
     }

@@ -114,25 +114,22 @@ class FridaShell {
     }
 
     fun listFiles(directory: String): List<FridaFile> {
-        // Usamos find + test en un único script shell para evitar problemas con
-        // ls -F en distintas versiones de toybox (columnas, flags, etc.)
+        // Detectamos frida-server por FIRMA DE CONTENIDO, no por nombre: así un
+        // binario renombrado a un nombre neutro (auto-renombrado al descargar)
+        // sigue siendo reconocido por la app. El nombre del fichero ya no delata
+        // a Frida ante una app objetivo, pero nosotros lo seguimos identificando.
         val result = Shell.cmd("""
             find '$directory' -maxdepth 1 -type f 2>/dev/null | while IFS= read -r f; do
-                n=${'$'}(basename "${'$'}f")
-                case "${'$'}n" in
-                    *frida*server*|*frida-server*)
-                        case "${'$'}n" in
-                            *.dex|*.so) ;;
-                            *)
-                                if [ -x "${'$'}f" ]; then
-                                    echo "1:${'$'}f"
-                                else
-                                    echo "0:${'$'}f"
-                                fi
-                                ;;
-                        esac
-                        ;;
-                esac
+                # Solo ejecutables ELF (descarta scripts .js, .json, .txt, etc.)
+                head -c 4 "${'$'}f" 2>/dev/null | grep -qa 'ELF' || continue
+                # ...que contengan el marcador de frida en su contenido. Así un
+                # binario renombrado a un nombre neutro se sigue reconociendo.
+                grep -qa 'frida' "${'$'}f" 2>/dev/null || continue
+                if [ -x "${'$'}f" ]; then
+                    echo "1:${'$'}f"
+                else
+                    echo "0:${'$'}f"
+                fi
             done
         """.trimIndent()).exec()
 
