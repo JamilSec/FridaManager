@@ -86,7 +86,7 @@ fun CreditsSheetContent(onOpenGithub: () -> Unit) {
         ) {
             Text("Frida en GitHub", style = MaterialTheme.typography.labelLarge)
             Spacer(Modifier.width(Spacing.sm))
-            Icon(Icons.AutoMirrored.Outlined.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp))
+            Icon(Icons.AutoMirrored.Outlined.OpenInNew, contentDescription = null, modifier = Modifier.size(Sizes.iconMd))
         }
     }
 }

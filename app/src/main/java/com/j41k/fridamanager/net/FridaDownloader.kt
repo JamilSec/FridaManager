@@ -75,6 +75,73 @@ class FridaDownloader(private val context: Context) {
         }
     }
 
+    /** Release de la propia app (para auto-actualización desde GitHub). */
+    data class AppRelease(
+        val version: String,
+        val apkUrl: String,
+        val sizeBytes: Long = 0L,
+        val notes: String? = null
+    )
+
+    fun getAppRelease(): AppRelease? {
+        return try {
+            val request = Request.Builder()
+                .url("https://api.github.com/repos/JamilSec/FridaManager/releases/latest")
+                .header("Accept", "application/vnd.github+json")
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return null
+                val body = response.body?.string() ?: return null
+                val json = JsonParser.parseString(body).asJsonObject
+                val version = json.get("tag_name")?.asString ?: return null
+                val notes = json.get("body")?.asString
+                val assets = json.getAsJsonArray("assets") ?: return null
+                for (asset in assets) {
+                    val obj = asset.asJsonObject
+                    val name = obj.get("name").asString
+                    if (name.endsWith(".apk", ignoreCase = true)) {
+                        return AppRelease(
+                            version = version,
+                            apkUrl = obj.get("browser_download_url").asString,
+                            sizeBytes = obj.get("size")?.asLong ?: 0L,
+                            notes = notes
+                        )
+                    }
+                }
+            }
+            null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** Descarga un APK a la caché. Devuelve el fichero o null. */
+    fun downloadApk(url: String, onProgress: (Float) -> Unit): File? {
+        return try {
+            val request = Request.Builder().url(url).build()
+            val outFile = File(context.cacheDir, "update.apk")
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return null
+                val total = response.body?.contentLength() ?: -1L
+                var read = 0L
+                response.body?.byteStream()?.use { input ->
+                    FileOutputStream(outFile).use { output ->
+                        val buffer = ByteArray(8192)
+                        var n: Int
+                        while (input.read(buffer).also { n = it } != -1) {
+                            output.write(buffer, 0, n)
+                            read += n
+                            if (total > 0) onProgress(read.toFloat() / total)
+                        }
+                    }
+                }
+            }
+            outFile
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     fun getDeviceArchitecture(): String {
         val abis = Build.SUPPORTED_ABIS
         return when {

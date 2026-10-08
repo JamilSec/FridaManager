@@ -2,6 +2,7 @@ package com.j41k.fridamanager.viewmodel
 
 import android.app.Application
 import android.content.Intent
+import android.util.Log
 import android.net.Uri
 import android.provider.Settings
 import androidx.compose.runtime.*
@@ -10,8 +11,13 @@ import androidx.lifecycle.viewModelScope
 import com.j41k.fridamanager.data.FridaFile
 import com.j41k.fridamanager.data.FridaShell
 import com.j41k.fridamanager.net.FridaDownloader
+import com.j41k.fridamanager.repack.ApkRepacker
+import com.j41k.fridamanager.repack.Keygen
+import com.j41k.fridamanager.repack.RootInstaller
 import com.j41k.fridamanager.service.FridaService
+import com.j41k.fridamanager.BuildConfig
 import kotlinx.coroutines.*
+import java.io.File
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -44,6 +50,9 @@ data class LogEntry(
 ) {
     fun toExportLine(): String = "[$timestamp] ${level.symbol} $message"
 }
+
+/** Etiqueta de logcat para el flujo de ocultado (grep: `adb logcat -s FM_HIDE`). */
+private const val HIDE_TAG = "FM_HIDE"
 
 /** Mensaje efímero para el usuario (Snackbar), con acción opcional. */
 data class UiMessage(
@@ -99,6 +108,30 @@ class FridaViewModel(application: Application) : AndroidViewModel(application) {
         _messages.tryEmit(UiMessage(text, actionLabel, onAction))
     }
 
+    /** Estado de Compose respaldado en SharedPreferences: cada escritura se persiste. */
+    private fun persistedString(key: String, default: () -> String): MutableState<String> {
+        val initial = prefs.getString(key, null) ?: default().also { prefs.edit().putString(key, it).apply() }
+        val backing = mutableStateOf(initial)
+        return object : MutableState<String> {
+            override var value: String
+                get() = backing.value
+                set(v) { backing.value = v; prefs.edit().putString(key, v).apply() }
+            override fun component1() = value
+            override fun component2(): (String) -> Unit = { value = it }
+        }
+    }
+
+    private fun persistedBoolean(key: String, default: Boolean): MutableState<Boolean> {
+        val backing = mutableStateOf(prefs.getBoolean(key, default))
+        return object : MutableState<Boolean> {
+            override var value: Boolean
+                get() = backing.value
+                set(v) { backing.value = v; prefs.edit().putBoolean(key, v).apply() }
+            override fun component1() = value
+            override fun component2(): (Boolean) -> Unit = { value = it }
+        }
+    }
+
     var isDownloading by mutableStateOf(false)
     var downloadProgress by mutableStateOf(0f)
     var downloadStatus by mutableStateOf("")
@@ -108,11 +141,21 @@ class FridaViewModel(application: Application) : AndroidViewModel(application) {
     var remoteRelease by mutableStateOf<FridaDownloader.FridaRelease?>(null)
     var isCheckingRemote by mutableStateOf(false)
 
-    // Configuración persistente (en memoria; persistencia real → fuera de scope)
-    var fridaPort by mutableStateOf("27042")
-    var fridaAddress by mutableStateOf("0.0.0.0")
-    var isSelinuxPermissive by mutableStateOf(false)
-    var autoPermissive by mutableStateOf(true) // Activado por defecto para Samsung/otros
+    // ── Auto-actualización de la app ──────────────────────────
+    var appUpdate by mutableStateOf<FridaDownloader.AppRelease?>(null)
+    var isCheckingAppUpdate by mutableStateOf(false)
+    var isInstallingUpdate by mutableStateOf(false)
+    val currentAppVersion: String get() = BuildConfig.VERSION_NAME
+
+    // Configuración persistente en SharedPreferences (sobrevive a reinicios).
+    private val prefs = application.getSharedPreferences("frida_manager", android.content.Context.MODE_PRIVATE)
+
+    // Puerto por defecto aleatorio (se genera y guarda una vez): el 27042 fijo es el
+    // primer puerto que comprueban las apps, así que evitamos delatarnos con él.
+    var fridaPort by persistedString("frida_port") { (20000..60000).random().toString() }
+    var fridaAddress by persistedString("frida_address") { "0.0.0.0" }
+    var autoPermissive by persistedBoolean("auto_permissive", true)
+    var isSelinuxPermissive by mutableStateOf(false) // estado en vivo, no se persiste
 
     // Filtros / UI estado de Logs
     var logSearchQuery by mutableStateOf("")
@@ -298,7 +341,7 @@ class FridaViewModel(application: Application) : AndroidViewModel(application) {
         pollingJob = viewModelScope.launch(Dispatchers.IO) {
             while (isActive) {
                 val status = try {
-                    fridaShell.getDetailedStatus()
+                    fridaShell.getDetailedStatus(fridaPort)
                 } catch (e: Exception) {
                     FridaShell.FridaStatus(false)
                 }
@@ -571,6 +614,175 @@ class FridaViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 addRawLog("⚠ Turbo Fix parcial: Se aplicó SELinux pero falló el setprop.")
                 notify("Ajuste aplicado parcialmente: revisa Registros")
+            }
+        }
+    }
+
+    // ── Ocultar / restaurar (repaquetado bajo otro nombre de paquete) ──
+    var isHiding by mutableStateOf(false)
+    /** Copia instalada aparte en esta sesión (modo no-reemplazo); en memoria. */
+    var hiddenPackage by mutableStateOf<String?>(null)
+
+    /** El paquete real de los componentes/clases, independiente de la identidad actual. */
+    private val codePackage = BuildConfig.APPLICATION_ID
+
+    /** true si esta instancia corre bajo un nombre de paquete distinto al original. */
+    val isHiddenInstance: Boolean
+        get() = getApplication<Application>().packageName != codePackage
+
+    /** Identidad de paquete con la que la app está instalada ahora mismo. */
+    val currentPackage: String
+        get() = getApplication<Application>().packageName
+
+    /**
+     * Repaqueta la app bajo [customName] (o un nombre aleatorio) y la instala. En modo
+     * [replaceOriginal] abre la copia y desinstala esta instancia.
+     */
+    fun hideApp(customName: String? = null, replaceOriginal: Boolean = true) {
+        val requested = customName?.trim()?.takeIf { it.isNotEmpty() }
+        if (requested != null && !isValidPackageName(requested)) {
+            notify("Nombre de paquete no válido (ej. com.ejemplo.app)")
+            return
+        }
+        repackageAs(requested ?: ApkRepacker.genPackageName(), replaceOriginal)
+    }
+
+    /**
+     * Restaura la identidad original: repaqueta la copia de vuelta al paquete original,
+     * la abre y desinstala la copia actual.
+     */
+    fun restoreOriginal() {
+        repackageAs(codePackage, replaceOriginal = true)
+    }
+
+    /**
+     * Núcleo del repaquetado. Reescribe el manifiesto cambiando la identidad actual por
+     * [target], manteniendo las clases de componentes apuntando al paquete del DEX y
+     * moviendo permisos/authorities al nuevo prefijo para no colisionar.
+     */
+    private fun repackageAs(target: String, replaceOriginal: Boolean) {
+        if (isHiding) return
+        if (!isRooted) { notify("Se requiere acceso root"); return }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            isHiding = true
+            try {
+                val current = currentPackage
+                if (target == current) { notify("Elige un nombre distinto al actual"); return@launch }
+
+                addRawLog("▶ Repaquetando $current → $target...")
+                Log.i(HIDE_TAG, "Repack start: $current -> $target")
+                val base = File(getApplication<Application>().applicationInfo.sourceDir)
+                val out = File(getApplication<Application>().cacheDir, "repack.apk")
+
+                // Clases de componentes: siguen apuntando al paquete del DEX. Permisos y
+                // authorities (prefijo de la identidad actual) se mueven al destino.
+                val keepClasses = setOf(
+                    "$codePackage.MainActivity",
+                    "$codePackage.service.FridaService"
+                )
+                val keys = Keygen.generate()
+                ApkRepacker.repack(base, out, keys) { s ->
+                    when {
+                        s == current -> target
+                        s in keepClasses -> s
+                        s.startsWith(".") -> codePackage + s
+                        s.startsWith("$current.") -> target + s.substring(current.length)
+                        else -> s
+                    }
+                }
+                addRawLog("APK repaquetado (${out.length() / 1024} KB). Instalando...")
+                Log.i(HIDE_TAG, "Repack OK: ${out.length()} bytes. Installing $target")
+
+                val result = RootInstaller.install(out)
+                out.delete()
+                Log.i(HIDE_TAG, "pm install success=${result.success} replace=$replaceOriginal output=${result.output}")
+                if (result.success) {
+                    addRawLog("✓ Instalada como $target")
+                    if (replaceOriginal) {
+                        addRawLog("Abriendo la copia y cerrando esta instancia…")
+                        RootInstaller.launchThenUninstall(target, current)
+                    } else {
+                        hiddenPackage = target
+                        notify("Copia instalada", actionLabel = "Abrir") { RootInstaller.launch(target) }
+                    }
+                } else {
+                    addRawLog("✗ Instalación fallida: ${result.output}")
+                    notify("No se pudo instalar la copia")
+                }
+            } catch (e: Exception) {
+                Log.e(HIDE_TAG, "Repack failed", e)
+                addRawLog("✗ Error al repaquetar: ${e.message}")
+                notify("Error al repaquetar la app")
+            } finally {
+                isHiding = false
+            }
+        }
+    }
+
+    /** Desinstala la copia instalada aparte en esta sesión (modo no-reemplazo). */
+    fun restoreHidden() {
+        val pkg = hiddenPackage ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            if (RootInstaller.uninstall(pkg)) {
+                addRawLog("Copia ($pkg) desinstalada.")
+                notify("Copia eliminada")
+                hiddenPackage = null
+            } else {
+                notify("No se pudo desinstalar $pkg")
+            }
+        }
+    }
+
+    private fun isValidPackageName(name: String): Boolean =
+        Regex("^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$").matches(name)
+
+    /** Consulta si hay una versión más reciente de la app publicada en GitHub. */
+    fun checkAppUpdate(userInitiated: Boolean = false) {
+        if (isCheckingAppUpdate) return
+        viewModelScope.launch(Dispatchers.IO) {
+            isCheckingAppUpdate = true
+            val release = fridaDownloader.getAppRelease()
+            val current = BuildConfig.VERSION_NAME
+            val newer = release != null &&
+                release.version.trimStart('v', 'V').trim() != current.trimStart('v', 'V').trim()
+            appUpdate = if (newer) release else null
+            isCheckingAppUpdate = false
+            if (userInitiated) {
+                notify(if (newer) "Actualización disponible: ${release?.version}" else "Ya tienes la última versión")
+            }
+        }
+    }
+
+    /** Descarga e instala la actualización de la app (requiere misma firma para -r). */
+    fun installAppUpdate() {
+        val release = appUpdate ?: return
+        if (isInstallingUpdate) return
+        viewModelScope.launch(Dispatchers.IO) {
+            isInstallingUpdate = true
+            try {
+                addRawLog("Descargando actualización ${release.version}...")
+                val apk = fridaDownloader.downloadApk(release.apkUrl) { }
+                if (apk == null || !apk.exists()) {
+                    notify("No se pudo descargar la actualización")
+                    return@launch
+                }
+                val result = RootInstaller.install(apk)
+                apk.delete()
+                if (result.success) {
+                    notify("Actualización instalada")
+                    appUpdate = null
+                } else {
+                    addRawLog("✗ Update falló: ${result.output}")
+                    // Causa típica en pruebas: firma distinta a la instalada.
+                    notify(
+                        if (result.output.contains("SIGNATURE", true) || result.output.contains("INCOMPATIBLE", true))
+                            "Firma incompatible: desinstala la versión actual primero"
+                        else "No se pudo instalar la actualización"
+                    )
+                }
+            } finally {
+                isInstallingUpdate = false
             }
         }
     }

@@ -10,7 +10,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.DeleteForever
 import androidx.compose.material.icons.outlined.FlashOn
 import androidx.compose.material.icons.outlined.Security
+import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.SecurityUpdateWarning
+import androidx.compose.material.icons.outlined.SystemUpdate
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -32,6 +35,9 @@ import com.j41k.fridamanager.viewmodel.FridaViewModel
 fun SettingsScreen(viewModel: FridaViewModel) {
     var showDeleteConfirm by rememberSaveable { mutableStateOf(false) }
     var showTurboConfirm by rememberSaveable { mutableStateOf(false) }
+    var showHideConfirm by rememberSaveable { mutableStateOf(false) }
+    var hideName by rememberSaveable { mutableStateOf("") }
+    var replaceApp by rememberSaveable { mutableStateOf(true) }
     val isRunning = viewModel.isFridaRunning
     val focusManager = LocalFocusManager.current
 
@@ -42,8 +48,58 @@ fun SettingsScreen(viewModel: FridaViewModel) {
             .padding(horizontal = Spacing.screen)
             .padding(top = Spacing.sm, bottom = Spacing.xl)
     ) {
+        // ── Actualizaciones ───────────────────────────────────
+        SectionHeader(title = "Actualizaciones", subtitle = "Versión instalada y disponibles")
+        Spacer(Modifier.height(Spacing.sm))
+
+        Column(Modifier.fillMaxWidth().panel().padding(Spacing.lg)) {
+            val update = viewModel.appUpdate
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Frida Manager", style = MaterialTheme.typography.bodyLarge, color = TextPrimary)
+                    Text(
+                        text = when {
+                            update != null -> "Disponible ${update.version} · tienes v${viewModel.currentAppVersion}"
+                            else -> "Versión v${viewModel.currentAppVersion}"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (update != null) AccentPrimaryHi else TextTertiary
+                    )
+                }
+                if (viewModel.isCheckingAppUpdate) {
+                    CircularProgressIndicator(Modifier.size(Sizes.iconMd), strokeWidth = 2.dp, color = AccentPrimaryHi)
+                } else {
+                    TextButton(onClick = { viewModel.checkAppUpdate(userInitiated = true) }) {
+                        Text("Buscar", style = MaterialTheme.typography.labelLarge)
+                    }
+                }
+            }
+            if (update != null) {
+                Spacer(Modifier.height(Spacing.md))
+                Button(
+                    onClick = { viewModel.installAppUpdate() },
+                    enabled = viewModel.isRooted && !viewModel.isInstallingUpdate,
+                    modifier = Modifier.fillMaxWidth().height(Sizes.touchTarget),
+                    shape = Shapes.control,
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentPrimary, contentColor = TextOnAccent)
+                ) {
+                    if (viewModel.isInstallingUpdate) {
+                        CircularProgressIndicator(Modifier.size(Sizes.iconMd), strokeWidth = 2.dp, color = TextOnAccent)
+                        Spacer(Modifier.width(Spacing.sm))
+                        Text("Instalando…", style = MaterialTheme.typography.labelLarge)
+                    } else {
+                        Icon(Icons.Outlined.SystemUpdate, contentDescription = null, modifier = Modifier.size(Sizes.iconMd))
+                        Spacer(Modifier.width(Spacing.sm))
+                        Text("Actualizar a ${update.version}", style = MaterialTheme.typography.labelLarge)
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(Spacing.xl))
+
         // ── Red ───────────────────────────────────────────────
-        SectionHeader(title = "Red", subtitle = "Endpoint en el que escucha frida-server")
+        SectionHeader(title = "Red", subtitle = "Dirección y puerto donde escucha frida-server")
         Spacer(Modifier.height(Spacing.sm))
 
         val portError = viewModel.portError
@@ -124,6 +180,131 @@ fun SettingsScreen(viewModel: FridaViewModel) {
 
         Spacer(Modifier.height(Spacing.xl))
 
+        // ── Ocultar la app ────────────────────────────────────
+        SectionHeader(title = "Ocultar la app", subtitle = "Reinstalar con un nombre de paquete neutro")
+        Spacer(Modifier.height(Spacing.sm))
+
+        if (viewModel.isHiddenInstance) {
+            Column(Modifier.fillMaxWidth().panel().padding(Spacing.lg)) {
+                Text("Instancia oculta activa", style = MaterialTheme.typography.bodyLarge, color = TextPrimary)
+                Text(
+                    "Esta app corre bajo «${viewModel.currentPackage}». Puedes restaurar su " +
+                        "identidad original cuando quieras.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextTertiary
+                )
+                Spacer(Modifier.height(Spacing.md))
+                OutlinedButton(
+                    onClick = { viewModel.restoreOriginal() },
+                    enabled = viewModel.isRooted && !viewModel.isHiding,
+                    modifier = Modifier.fillMaxWidth().height(Sizes.touchTarget),
+                    shape = Shapes.control
+                ) {
+                    Icon(Icons.Outlined.Restore, contentDescription = null, modifier = Modifier.size(Sizes.iconMd))
+                    Spacer(Modifier.width(Spacing.sm))
+                    Text("Restaurar app original", style = MaterialTheme.typography.labelLarge)
+                }
+            }
+            Spacer(Modifier.height(Spacing.md))
+        }
+
+        Column(Modifier.fillMaxWidth().panel().padding(Spacing.lg)) {
+            val hidden = viewModel.hiddenPackage
+            Text(
+                text = "Crea una copia de la app con un nombre de paquete distinto para que una app " +
+                    "bajo análisis no la detecte por «${viewModel.currentPackage}». " +
+                    "Requiere root.",
+                style = MaterialTheme.typography.bodySmall,
+                color = TextSecondary
+            )
+            Spacer(Modifier.height(Spacing.md))
+            OutlinedTextField(
+                value = hideName,
+                onValueChange = { hideName = it },
+                enabled = !viewModel.isHiding,
+                label = { Text("Nombre de paquete (opcional)") },
+                placeholder = { Text("aleatorio si se deja vacío") },
+                supportingText = { Text("Ej. com.android.systemservice") },
+                singleLine = true,
+                textStyle = MonoBodyMedium,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+                modifier = Modifier.fillMaxWidth(),
+                shape = Shapes.control,
+                colors = fieldColors()
+            )
+            Spacer(Modifier.height(Spacing.sm))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .toggleable(
+                        value = replaceApp,
+                        role = Role.Switch,
+                        enabled = !viewModel.isHiding,
+                        onValueChange = { replaceApp = it }
+                    )
+                    .padding(vertical = Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Reemplazar esta app", style = MaterialTheme.typography.bodyLarge, color = TextPrimary)
+                    Text(
+                        if (replaceApp) "Abre la copia y desinstala esta app"
+                        else "Instala la copia aparte, conservando esta app",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextTertiary
+                    )
+                }
+                Spacer(Modifier.width(Spacing.lg))
+                Switch(
+                    checked = replaceApp,
+                    onCheckedChange = null,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = TextOnAccent,
+                        checkedTrackColor = AccentPrimaryHi,
+                        uncheckedThumbColor = TextSecondary,
+                        uncheckedTrackColor = SurfaceHigh,
+                        uncheckedBorderColor = SurfaceBorder
+                    )
+                )
+            }
+            Spacer(Modifier.height(Spacing.md))
+            Button(
+                onClick = { focusManager.clearFocus(); showHideConfirm = true },
+                enabled = viewModel.isRooted && !viewModel.isHiding,
+                modifier = Modifier.fillMaxWidth().height(Sizes.touchTarget),
+                shape = Shapes.control,
+                colors = ButtonDefaults.buttonColors(containerColor = AccentPrimary, contentColor = TextOnAccent)
+            ) {
+                if (viewModel.isHiding) {
+                    CircularProgressIndicator(Modifier.size(Sizes.iconMd), strokeWidth = 2.dp, color = TextOnAccent)
+                    Spacer(Modifier.width(Spacing.sm))
+                    Text("Creando copia…", style = MaterialTheme.typography.labelLarge)
+                } else {
+                    Icon(Icons.Outlined.VisibilityOff, contentDescription = null, modifier = Modifier.size(Sizes.iconMd))
+                    Spacer(Modifier.width(Spacing.sm))
+                    Text("Crear copia oculta", style = MaterialTheme.typography.labelLarge)
+                }
+            }
+            if (hidden != null) {
+                Spacer(Modifier.height(Spacing.md))
+                HorizontalDivider(color = SurfaceDivider)
+                Spacer(Modifier.height(Spacing.md))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Copia instalada", style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
+                        Text(hidden, style = MonoCaption, color = AccentCyan)
+                    }
+                    TextButton(
+                        onClick = { viewModel.restoreHidden() },
+                        colors = ButtonDefaults.textButtonColors(contentColor = StatusCriticalHi)
+                    ) { Text("Desinstalar", style = MaterialTheme.typography.labelLarge) }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(Spacing.xl))
+
         // ── Mantenimiento ─────────────────────────────────────
         SectionHeader(title = "Mantenimiento")
         Spacer(Modifier.height(Spacing.sm))
@@ -138,7 +319,7 @@ fun SettingsScreen(viewModel: FridaViewModel) {
             colors = ButtonDefaults.outlinedButtonColors(contentColor = StatusCriticalHi)
         ) {
             if (viewModel.isDeleting) {
-                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = StatusCriticalHi)
+                CircularProgressIndicator(Modifier.size(Sizes.iconMd), strokeWidth = 2.dp, color = StatusCriticalHi)
                 Spacer(Modifier.width(Spacing.sm))
                 Text("Eliminando…", style = MaterialTheme.typography.labelLarge)
             } else {
@@ -179,6 +360,37 @@ fun SettingsScreen(viewModel: FridaViewModel) {
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancelar") }
+            },
+            containerColor = SurfaceMid,
+            titleContentColor = TextPrimary,
+            textContentColor = TextSecondary
+        )
+    }
+
+    if (showHideConfirm) {
+        AlertDialog(
+            onDismissRequest = { showHideConfirm = false },
+            icon = { Icon(Icons.Outlined.VisibilityOff, contentDescription = null, tint = AccentPrimaryHi) },
+            title = { Text(if (replaceApp) "¿Reemplazar la app?" else "¿Crear copia oculta?") },
+            text = {
+                Text(
+                    if (replaceApp)
+                        "Se instalará una copia con un nombre de paquete nuevo, se abrirá, y esta " +
+                            "app actual se desinstalará. Requiere conceder root al instalador."
+                    else
+                        "Se instalará una segunda copia con un nombre de paquete distinto, firmada " +
+                            "con una clave nueva. La app actual no se toca; podrás desinstalar la " +
+                            "copia desde aquí. Requiere conceder root al instalador."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.hideApp(hideName, replaceApp)
+                    showHideConfirm = false
+                }) { Text(if (replaceApp) "Reemplazar" else "Crear copia") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showHideConfirm = false }) { Text("Cancelar") }
             },
             containerColor = SurfaceMid,
             titleContentColor = TextPrimary,

@@ -110,6 +110,10 @@ fun FridaManagerApp(viewModel: FridaViewModel) {
         DownloadDialog(status = viewModel.downloadStatus, progress = viewModel.downloadProgress)
     }
 
+    if (viewModel.isHiding) {
+        HideProgressDialog()
+    }
+
     if (showInfoSheet) {
         ModalBottomSheet(
             onDismissRequest = { showInfoSheet = false },

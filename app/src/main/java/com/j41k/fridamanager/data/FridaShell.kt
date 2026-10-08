@@ -16,7 +16,9 @@ class FridaShell {
     }
 
     fun stopFrida() {
-        Shell.cmd("pkill -9 frida-server 2>/dev/null; pkill -9 frida-server 2>/dev/null").exec()
+        // Un solo comando, independiente del nombre: mata por ruta del ejecutable.
+        // El server se lanza desde /data/local/tmp, así que su cmdline la contiene.
+        Shell.cmd("pkill -9 -f '/data/local/tmp/' 2>/dev/null").exec()
     }
 
     data class FridaStatus(
@@ -26,51 +28,64 @@ class FridaShell {
         val listenAddress: String? = null
     )
 
-    fun getDetailedStatus(): FridaStatus {
-        // OPTIMIZADO: Una sola llamada shell en lugar de cientos.
-        // ps -A devuelve todos los procesos; '[f]' evita que grep se auto-detecte.
-        val psResult = Shell.cmd(
-            "ps -A 2>/dev/null | grep '[f]rida-server' | awk '{print \$2}' | head -1"
-        ).exec()
+    /**
+     * Estado del server de forma INDEPENDIENTE DEL NOMBRE del binario (que puede estar
+     * renombrado por la función de ocultado). El PID se obtiene del proceso cuyo
+     * ejecutable vive en /data/local/tmp, y "corre" se decide por el socket en escucha
+     * en [expectedPort] (o el rango por defecto si no se indica).
+     */
+    fun getDetailedStatus(expectedPort: String? = null): FridaStatus {
+        val wanted = expectedPort?.trim()?.toIntOrNull()
+        fun portMatches(p: Int) = if (wanted != null) p == wanted else p in 27042..27052
 
-        val pid = psResult.out.firstOrNull()?.trim()?.toIntOrNull()
-            ?: return FridaStatus(false)
+        // Vía rápida: ss en una sola llamada da estado + puerto + dirección + PID,
+        // sin importar cómo se llame el binario.
+        val ss = Shell.cmd("ss -H -ltnp 2>/dev/null").exec()
+        if (ss.isSuccess) {
+            for (line in ss.out) {
+                // LISTEN 0 50 0.0.0.0:27042 0.0.0.0:* users:(("srv-x",pid=1234,fd=7))
+                val cols = line.trim().split(Regex("\\s+"))
+                val local = cols.getOrNull(3) ?: continue
+                val p = local.substringAfterLast(':').toIntOrNull() ?: continue
+                if (!portMatches(p)) continue
+                val pid = Regex("pid=(\\d+)").find(line)?.groupValues?.get(1)?.toIntOrNull()
+                return FridaStatus(
+                    isRunning = true,
+                    pid = pid,
+                    port = p.toString(),
+                    listenAddress = normalizeAddr(local.substringBeforeLast(':'))
+                )
+            }
+            return FridaStatus(false)
+        }
 
-        // Verificar socket en escucha — revisamos tanto tcp como tcp6
+        // Fallback (sin ss): /proc/net/tcp — da estado y puerto, sin PID.
         val tcpResult = Shell.cmd("cat /proc/net/tcp /proc/net/tcp6 2>/dev/null").exec()
-        var port: String? = null
-        var address: String? = null
-        var isListening = false
-
         if (tcpResult.isSuccess) {
             for (line in tcpResult.out.drop(1)) {
                 val parts = line.trim().split(Regex("\\s+"))
-                // parts[3] == "0A" → LISTEN, parts[7] → inode owner UID (opcional)
                 if (parts.size >= 4 && parts[3] == "0A") {
                     val addrPort = parts[1].split(":")
                     if (addrPort.size == 2) {
                         val decPort = addrPort[1].toIntOrNull(16) ?: continue
-                        // Puerto de Frida por defecto es exactamente 27042.
-                        // Aceptamos ±10 para cubrir configuraciones personalizadas comunes.
-                        if (decPort in 27042..27052) {
-                            isListening = true
-                            port = decPort.toString()
-                            address = parseHexIp(addrPort[0])
-                            break
+                        if (portMatches(decPort)) {
+                            return FridaStatus(
+                                isRunning = true,
+                                pid = null,
+                                port = decPort.toString(),
+                                listenAddress = parseHexIp(addrPort[0])
+                            )
                         }
                     }
                 }
             }
         }
+        return FridaStatus(false)
+    }
 
-        // Si el proceso existe PERO aún no hay socket (arrancando), reportamos "iniciando"
-        // usando isRunning=true con port=null para que la UI lo refleje
-        return FridaStatus(
-            isRunning = isListening,
-            pid = pid, // Siempre mostramos el PID si el proceso existe
-            port = if (isListening) port else null,
-            listenAddress = if (isListening) address else null
-        )
+    private fun normalizeAddr(raw: String): String {
+        val a = raw.trim('[', ']')
+        return if (a == "*" || a == "::" || a.isEmpty()) "0.0.0.0" else a
     }
 
     private fun parseHexIp(hexIp: String): String {

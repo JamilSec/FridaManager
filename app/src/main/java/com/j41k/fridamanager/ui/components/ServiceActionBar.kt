@@ -127,6 +127,43 @@ fun ServiceActionBar(viewModel: FridaViewModel, modifier: Modifier = Modifier) {
     }
 }
 
+/** Diálogo bloqueante indeterminado mientras se repaqueta/instala la copia oculta. */
+@Composable
+fun HideProgressDialog() {
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = {},
+        properties = androidx.compose.ui.window.DialogProperties(
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false
+        )
+    ) {
+        Surface(shape = Shapes.container, color = SurfaceMid, contentColor = TextPrimary) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(Spacing.xl),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                CircularProgressIndicator(
+                    Modifier.size(Sizes.iconLg),
+                    strokeWidth = 2.dp,
+                    color = AccentPrimaryHi
+                )
+                Spacer(Modifier.width(Spacing.lg))
+                Column {
+                    Text("Ocultando la app", style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(Spacing.xxs))
+                    Text(
+                        "Repaquetando, firmando e instalando…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
+                }
+            }
+        }
+    }
+}
+
 /**
  * Progreso de descarga como diálogo modal: bloquea la interacción de verdad,
  * respeta insets y el botón atrás no lo cierra a mitad de instalación.

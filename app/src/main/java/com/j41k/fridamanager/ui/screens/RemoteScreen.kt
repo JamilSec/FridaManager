@@ -122,7 +122,7 @@ private fun ReleaseCard(
         Spacer(Modifier.height(Spacing.md))
         Row(Modifier.fillMaxWidth()) {
             MetaCell("Publicada", formatPublishedDate(release.publishedAt), mono = false, modifier = Modifier.weight(1f))
-            MetaCell("Tag", release.version, mono = true, modifier = Modifier.weight(1f))
+            MetaCell("Etiqueta", release.version, mono = true, modifier = Modifier.weight(1f))
         }
 
         Spacer(Modifier.height(Spacing.lg))

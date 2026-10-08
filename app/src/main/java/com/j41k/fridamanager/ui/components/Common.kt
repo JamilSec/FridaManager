@@ -131,7 +131,7 @@ fun EmptyState(
             Spacer(Modifier.height(Spacing.lg))
             FilledTonalButton(onClick = onAction, shape = Shapes.control) {
                 if (actionIcon != null) {
-                    Icon(actionIcon, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(actionIcon, contentDescription = null, modifier = Modifier.size(Sizes.iconMd))
                     Spacer(Modifier.width(Spacing.sm))
                 }
                 Text(actionLabel, style = MaterialTheme.typography.labelLarge)
